@@ -54,7 +54,7 @@ export const useAgentStore = create<AgentState>((set) => ({
   messages: [],
   apiKeySet: false,
   inputText: "",
-  selectedModel: "claude-haiku-4-5-20251001" as ModelId,
+  selectedModel: "claude-sonnet-4-5" as ModelId,
   selectedMode: "browser" as AgentMode,
   selectedProvider: "anthropic" as ApiProvider,
   customBaseUrl: "",
