@@ -49,13 +49,34 @@ function toPastTense(text: string): string {
   return text;
 }
 
+// the chosen mode survives restarts; localStorage can throw (blocked or cleared site data)
+const MODE_KEY = "taskhomie.selectedMode";
+
+function loadMode(): AgentMode {
+  try {
+    const saved = localStorage.getItem(MODE_KEY);
+    if (saved === "computer" || saved === "browser") return saved;
+  } catch {
+    // fall through to the default
+  }
+  return "browser";
+}
+
+function saveMode(mode: AgentMode) {
+  try {
+    localStorage.setItem(MODE_KEY, mode);
+  } catch {
+    // not persisted; the choice still applies for this session
+  }
+}
+
 export const useAgentStore = create<AgentState>((set) => ({
   isRunning: false,
   messages: [],
   apiKeySet: false,
   inputText: "",
   selectedModel: "claude-sonnet-5-5" as ModelId,
-  selectedMode: "browser" as AgentMode,
+  selectedMode: loadMode(),
   selectedProvider: "anthropic" as ApiProvider,
   customBaseUrl: "",
   customModel: "",
@@ -151,7 +172,10 @@ export const useAgentStore = create<AgentState>((set) => ({
 
   setCustomModel: (customModel) => set({ customModel }),
 
-  setSelectedMode: (selectedMode) => set({ selectedMode }),
+  setSelectedMode: (selectedMode) => {
+    saveMode(selectedMode);
+    set({ selectedMode });
+  },
 
   setVoiceMode: (voiceMode) => set({ voiceMode }),
 
@@ -173,3 +197,12 @@ export const useAgentStore = create<AgentState>((set) => ({
 
   setConversationId: (id) => set({ conversationId: id }),
 }));
+
+// keep the spotlight bar and the main panel (separate windows) in step
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key === MODE_KEY && (e.newValue === "computer" || e.newValue === "browser")) {
+      useAgentStore.setState({ selectedMode: e.newValue });
+    }
+  });
+}
