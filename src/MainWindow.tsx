@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import ChatView from "./components/ChatView";
 import { useAgent } from "./hooks/useAgent";
 import { useAgentStore } from "./stores/agentStore";
-import { ChevronRight, X, Send, Volume2, Mic, Maximize2 } from "lucide-react";
+import { ChevronRight, X, Send, Volume2, Mic, Maximize2, MousePointerClick } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 // main window states
@@ -81,6 +81,7 @@ export default function MainWindow() {
   const [state, dispatch] = useReducer(reducer, { mode: "idle" });
   const { submit } = useAgent();
   const selectedMode = useAgentStore((s) => s.selectedMode);
+  const setSelectedMode = useAgentStore((s) => s.setSelectedMode);
 
   const helpPromptRef = useRef("");
   const spotlightPromptRef = useRef("");
@@ -292,11 +293,27 @@ export default function MainWindow() {
           onKeyDown={(e) => {
             if (e.key === "Enter") handleSubmit();
             if (e.key === "Escape") handleCancel();
+            if (e.key === "Tab") {
+              e.preventDefault();
+              setSelectedMode(selectedMode === "computer" ? "browser" : "computer");
+            }
           }}
           placeholder="What would you like me to do?"
           className="flex-1 bg-transparent text-white text-[15px] placeholder:text-white/40 focus:outline-none"
         />
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setSelectedMode(selectedMode === "computer" ? "browser" : "computer")}
+            className={`h-7 px-2 rounded-lg flex items-center gap-1.5 transition-colors ${
+              selectedMode === "computer"
+                ? "bg-orange-500/30 border border-orange-400/30 text-orange-300"
+                : "bg-white/5 border border-white/10 text-white/40 hover:text-white/60"
+            }`}
+            title={selectedMode === "computer" ? "Computer control (Tab to switch to browser)" : "Browser mode (Tab to switch to computer control)"}
+          >
+            <MousePointerClick size={12} />
+            <span className="text-[10px]">{selectedMode === "computer" ? "Computer" : "Browser"}</span>
+          </button>
           <kbd className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">esc</kbd>
           <button
             onClick={handleSubmit}
