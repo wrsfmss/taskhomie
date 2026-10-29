@@ -6,5 +6,6 @@ pub mod computer;
 pub mod memory;
 pub mod openai_api;
 pub mod panels;
+pub mod queue;
 pub mod storage;
 pub mod voice;

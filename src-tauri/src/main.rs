@@ -13,6 +13,7 @@ mod computer;
 mod memory;
 mod openai_api;
 mod panels;
+mod queue;
 mod permissions;
 mod storage;
 mod voice;
@@ -824,6 +825,12 @@ fn main() {
             current_session_id: std::sync::Mutex::new(0),
         })
         .setup(|app| {
+            // file-based task queue for scheduled jobs (~/.taskhomie/queue)
+            {
+                let state = app.state::<AppState>();
+                queue::start(app.handle().clone(), state.agent.clone(), state.running.clone());
+            }
+
             // hide from dock - menubar app only (macOS only)
             #[cfg(target_os = "macos")]
             {

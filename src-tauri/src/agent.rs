@@ -94,6 +94,8 @@ pub struct Agent {
     computer: Mutex<Option<ComputerControl>>,
     bash: Mutex<BashExecutor>,
     browser_client: SharedBrowserClient,
+    // final text of the last run, read by the task queue
+    last_text: std::sync::Mutex<String>,
 }
 
 impl Agent {
@@ -106,6 +108,7 @@ impl Agent {
             computer: Mutex::new(None),
             bash: Mutex::new(BashExecutor::new()),
             browser_client: crate::browser::create_shared_browser_client(),
+            last_text: std::sync::Mutex::new(String::new()),
         }
     }
 
@@ -123,6 +126,10 @@ impl Agent {
 
     pub fn has_api_key(&self) -> bool {
         self.api_key.is_some()
+    }
+
+    pub fn last_text(&self) -> String {
+        self.last_text.lock().map(|t| t.clone()).unwrap_or_default()
     }
 
     pub fn is_running(&self) -> bool {
@@ -145,6 +152,9 @@ impl Agent {
 
         let api_key = self.api_key.clone().ok_or(AgentError::NoApiKey)?;
         println!("[agent] API key present");
+        if let Ok(mut t) = self.last_text.lock() {
+            t.clear();
+        }
 
         // init computer control
         println!("[agent] Initializing computer control...");
@@ -460,6 +470,9 @@ impl Agent {
 
                     ContentBlock::Text { text } => {
                         println!("[agent] Text: {}", text);
+                        if let Ok(mut t) = self.last_text.lock() {
+                            *t = text.clone();
+                        }
                         self.emit(&app_handle, "response", text, None, None);
                     }
 
