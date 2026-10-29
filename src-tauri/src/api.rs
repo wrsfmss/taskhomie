@@ -51,6 +51,8 @@ pub enum ContentBlock {
     ToolResult {
         tool_use_id: String,
         content: Vec<ToolResultContent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
     },
     #[serde(rename = "thinking")]
     Thinking {

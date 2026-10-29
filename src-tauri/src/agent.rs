@@ -434,7 +434,14 @@ impl Agent {
             }).collect();
             println!("[agent] Response blocks: {:?}", block_types);
 
-            for block in &response_content {
+            // computer toolset batches: only the last action returns a screenshot,
+            // and the first failure halts the rest of the batch
+            let last_computer_idx = response_content
+                .iter()
+                .rposition(|b| matches!(b, ContentBlock::ToolUse { name, .. } if name == "computer"));
+            let mut batch_failed = false;
+
+            for (block_idx, block) in response_content.iter().enumerate() {
                 if !self.running.load(Ordering::SeqCst) {
                     break;
                 }
@@ -457,7 +464,15 @@ impl Agent {
                     }
 
                     ContentBlock::ToolUse { id, name, input } => {
-                        if name == "computer" {
+                        if name == "computer" && batch_failed {
+                            tool_results.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: vec![ToolResultContent::Text {
+                                    text: "Not executed: an earlier computer action in this turn failed.".to_string(),
+                                }],
+                                is_error: Some(true),
+                            });
+                        } else if name == "computer" {
                             // parse action
                             let action: ComputerAction = match serde_json::from_value(input.clone())
                             {
@@ -469,6 +484,7 @@ impl Agent {
                                     tool_results.push(ContentBlock::ToolResult {
                                         tool_use_id: id.clone(),
                                         content: vec![ToolResultContent::Text { text: msg }],
+                                        is_error: None,
                                     });
                                     continue;
                                 }
@@ -504,6 +520,19 @@ impl Agent {
 
                             match result {
                                 Ok(action_result) => {
+                                    // mid-batch actions skip the screenshot: the model asks for one
+                                    // (or gets one from the last action) once the whole batch has run
+                                    if Some(block_idx) != last_computer_idx
+                                        && action.action != "zoom"
+                                        && action.action != "screenshot"
+                                    {
+                                        tool_results.push(ContentBlock::ToolResult {
+                                            tool_use_id: id.clone(),
+                                            content: vec![ToolResultContent::Text { text: "OK".to_string() }],
+                                            is_error: None,
+                                        });
+                                        continue;
+                                    }
                                     // zoom action returns screenshot directly, others need post-screenshot
                                     let screenshot = if action.action == "zoom" {
                                         // zoom returns the region screenshot, use panel exclusion
@@ -567,14 +596,17 @@ impl Agent {
                                                 data: screenshot,
                                             },
                                         }],
+                                        is_error: None,
                                     });
                                 }
                                 Err(e) => {
+                                    batch_failed = true;
                                     tool_results.push(ContentBlock::ToolResult {
                                         tool_use_id: id.clone(),
                                         content: vec![ToolResultContent::Text {
                                             text: format!("Error: {}", e),
                                         }],
+                                        is_error: Some(true),
                                     });
                                 }
                             }
@@ -591,7 +623,8 @@ impl Agent {
                                     content: vec![ToolResultContent::Text {
                                         text: "Bash session restarted".to_string(),
                                     }],
-                                });
+                                        is_error: None,
+                                    });
                             } else if let Some(cmd) = command {
                                 // emit tool for TS-side formatting
                                 self.emit_tool(&app_handle, "bash", input.clone());
@@ -619,7 +652,8 @@ impl Agent {
                                 tool_results.push(ContentBlock::ToolResult {
                                     tool_use_id: id.clone(),
                                     content: vec![ToolResultContent::Text { text: output }],
-                                });
+                                        is_error: None,
+                                    });
                             }
                         } else if is_browser_tool(name) && mode == AgentMode::Browser {
                             // check if stopped before starting browser tool
@@ -686,7 +720,8 @@ impl Agent {
                                                     data: base64_data,
                                                 },
                                             }],
-                                        });
+                                        is_error: None,
+                                    });
                                     }
                                     Ok(BrowserToolResult::Text(output)) => {
                                         println!("[agent] Browser tool success ({} chars): {}...", output.len(), &output[..output.len().min(200)]);
@@ -694,7 +729,8 @@ impl Agent {
                                         tool_results.push(ContentBlock::ToolResult {
                                             tool_use_id: id.clone(),
                                             content: vec![ToolResultContent::Text { text: output }],
-                                        });
+                                        is_error: None,
+                                    });
                                     }
                                     Err(err_msg) => {
                                         println!("[agent] Browser tool failed: {}", err_msg);
@@ -706,7 +742,8 @@ impl Agent {
                                         tool_results.push(ContentBlock::ToolResult {
                                             tool_use_id: id.clone(),
                                             content: vec![ToolResultContent::Text { text: err_msg }],
-                                        });
+                                        is_error: None,
+                                    });
                                     }
                                 }
                             } else {
@@ -714,7 +751,8 @@ impl Agent {
                                 tool_results.push(ContentBlock::ToolResult {
                                     tool_use_id: id.clone(),
                                     content: vec![ToolResultContent::Text { text: err_msg }],
-                                });
+                                        is_error: None,
+                                    });
                             }
                         } else if name == "memory" {
                             self.emit_tool(&app_handle, "memory", input.clone());
@@ -722,7 +760,8 @@ impl Agent {
                             tool_results.push(ContentBlock::ToolResult {
                                 tool_use_id: id.clone(),
                                 content: vec![ToolResultContent::Text { text: output }],
-                            });
+                                        is_error: None,
+                                    });
                         } else if name == "speak" {
                             // handle speak tool for voice mode
                             if let Some(text) = input.get("text").and_then(|t| t.as_str()) {
@@ -741,7 +780,8 @@ impl Agent {
                                                 content: vec![ToolResultContent::Text {
                                                     text: "Speech delivered.".to_string(),
                                                 }],
-                                            });
+                                        is_error: None,
+                                    });
                                         }
                                         Err(e) => {
                                             let err_msg = format!("TTS error: {}", e);
@@ -749,7 +789,8 @@ impl Agent {
                                             tool_results.push(ContentBlock::ToolResult {
                                                 tool_use_id: id.clone(),
                                                 content: vec![ToolResultContent::Text { text: err_msg }],
-                                            });
+                                        is_error: None,
+                                    });
                                         }
                                     }
                                 } else {
@@ -758,6 +799,7 @@ impl Agent {
                                         content: vec![ToolResultContent::Text {
                                             text: "TTS not available - ELEVENLABS_API_KEY not set".to_string(),
                                         }],
+                                        is_error: None,
                                     });
                                 }
                             }
@@ -769,7 +811,8 @@ impl Agent {
                                 content: vec![ToolResultContent::Text {
                                     text: format!("Error: Unknown tool '{}'. Use the available tools: computer, bash, memory, speak.", name),
                                 }],
-                            });
+                                        is_error: None,
+                                    });
                         }
                     }
 
