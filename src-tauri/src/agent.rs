@@ -463,13 +463,13 @@ impl Agent {
                             {
                                 Ok(a) => a,
                                 Err(e) => {
-                                    self.emit(
-                                        &app_handle,
-                                        "error",
-                                        &format!("Failed to parse action: {}", e),
-                                        None,
-                                        None,
-                                    );
+                                    let msg = format!("Failed to parse action: {}", e);
+                                    self.emit(&app_handle, "error", &msg, None, None);
+                                    // every tool_use needs a tool_result or the next request is rejected
+                                    tool_results.push(ContentBlock::ToolResult {
+                                        tool_use_id: id.clone(),
+                                        content: vec![ToolResultContent::Text { text: msg }],
+                                    });
                                     continue;
                                 }
                             };

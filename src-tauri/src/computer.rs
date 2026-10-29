@@ -54,6 +54,10 @@ pub struct ComputerAction {
     pub key: Option<String>,  // for hold_key action
     #[serde(default)]
     pub region: Option<[i32; 4]>,  // for zoom action [x1, y1, x2, y2]
+    #[serde(default)]
+    pub repeat: Option<u32>,  // key action: press N times (computer toolset)
+    #[serde(default)]
+    pub duration: Option<f64>,  // wait / hold_key seconds (computer toolset)
 }
 
 pub struct ComputerControl {
@@ -278,13 +282,15 @@ impl ComputerControl {
 
             "key" => {
                 if let Some(key_str) = &action.text {
-                    #[cfg(target_os = "macos")]
-                    {
-                        self.press_key_cgevent(key_str)?;
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        self.press_key(&mut enigo, key_str)?;
+                    for _ in 0..action.repeat.unwrap_or(1).clamp(1, 100) {
+                        #[cfg(target_os = "macos")]
+                        {
+                            self.press_key_cgevent(key_str)?;
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            self.press_key(&mut enigo, key_str)?;
+                        }
                     }
                 }
                 Ok(None)
@@ -321,7 +327,8 @@ impl ComputerControl {
             }
 
             "wait" => {
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                let secs = action.duration.unwrap_or(1.0).clamp(0.0, 300.0);
+                std::thread::sleep(std::time::Duration::from_secs_f64(secs));
                 Ok(None)
             }
 
@@ -350,7 +357,8 @@ impl ComputerControl {
             "hold_key" => {
                 // hold_key holds a modifier key while performing the action in 'text' field
                 // e.g. hold shift while clicking
-                if let Some(key_str) = &action.key {
+                // the computer toolset sends the key in `text` plus a `duration`
+                if let Some(key_str) = action.key.as_ref().or(action.text.as_ref()) {
                     #[cfg(target_os = "macos")]
                     {
                         self.hold_key_cgevent(key_str)?;
@@ -358,6 +366,9 @@ impl ComputerControl {
                     #[cfg(not(target_os = "macos"))]
                     {
                         self.hold_key_enigo(&mut enigo, key_str)?;
+                    }
+                    if let Some(secs) = action.duration {
+                        std::thread::sleep(std::time::Duration::from_secs_f64(secs.clamp(0.0, 300.0)));
                     }
                 }
                 Ok(None)

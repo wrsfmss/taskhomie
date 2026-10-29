@@ -109,7 +109,10 @@ pub struct Message {
 struct ThinkingConfig {
     #[serde(rename = "type")]
     config_type: String,
-    budget_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -189,6 +192,10 @@ impl AnthropicClient {
         let mut tools = Vec::new();
 
         match mode {
+            AgentMode::Computer if uses_computer_toolset(&self.model) => {
+                // 5.5+ models only accept the computer toolset: no name, no display size
+                tools.push(serde_json::json!({"type": "computer_toolset_20260801"}));
+            }
             AgentMode::Computer => {
                 // computer tool for screen control
                 tools.push(serde_json::json!({
@@ -322,9 +329,20 @@ impl AnthropicClient {
             tools,
             messages,
             stream: true,
-            thinking: ThinkingConfig {
-                config_type: "enabled".to_string(),
-                budget_tokens: THINKING_BUDGET,
+            thinking: if uses_computer_toolset(&self.model) {
+                // 5.5 models reject budget_tokens; summarized display keeps thinking
+                // blocks non-empty so they are stored and replayed unchanged
+                ThinkingConfig {
+                    config_type: "adaptive".to_string(),
+                    budget_tokens: None,
+                    display: Some("summarized".to_string()),
+                }
+            } else {
+                ThinkingConfig {
+                    config_type: "enabled".to_string(),
+                    budget_tokens: Some(THINKING_BUDGET),
+                    display: None,
+                }
             },
             context_management: ContextManagement {
                 edits: vec![
@@ -345,6 +363,11 @@ impl AnthropicClient {
             },
         };
 
+        let mut body = serde_json::to_value(&request).map_err(|e| ApiError::Api(e.to_string()))?;
+        if uses_computer_toolset(&self.model) {
+            to_toolset_messages(&mut body);
+        }
+
         let response = self
             .client
             .post(ANTHROPIC_API_URL)
@@ -352,7 +375,7 @@ impl AnthropicClient {
             .header("anthropic-version", API_VERSION)
             .header("anthropic-beta", BETA_HEADER)
             .header("content-type", "application/json")
-            .json(&request)
+            .json(&body)
             .send()
             .await?;
 
@@ -461,9 +484,16 @@ impl AnthropicClient {
 
                                 if block_type == "tool_use" {
                                     let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-                                    let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                                    let mut name = block.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                                    // computer toolset calls arrive as name=<member>, toolset_name="computer";
+                                    // keep a marker so assembly can rebuild the internal computer/action form
+                                    if block.get("toolset_name").and_then(|t| t.as_str()) == Some("computer") {
+                                        name = format!("{TOOLSET_PREFIX}{name}");
+                                    }
                                     tool_info[index] = (id.clone(), name.clone());
-                                    let _ = event_tx.send(StreamEvent::ToolUseStart { name });
+                                    let _ = event_tx.send(StreamEvent::ToolUseStart {
+                                        name: if name.starts_with(TOOLSET_PREFIX) { "computer".to_string() } else { name },
+                                    });
                                 } else if block_type == "server_tool_use" {
                                     // server-side tool (web_search, web_fetch)
                                     let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
@@ -583,6 +613,13 @@ impl AnthropicClient {
                                             serde_json::json!({})
                                         } else {
                                             serde_json::from_str(json_str).unwrap_or(serde_json::json!({}))
+                                        };
+                                        let (name, input) = match name.strip_prefix(TOOLSET_PREFIX) {
+                                            Some(member) => (
+                                                "computer".to_string(),
+                                                with_action(member, input),
+                                            ),
+                                            None => (name, input),
                                         };
                                         content_blocks.push(ContentBlock::ToolUse { id, name, input });
                                     }
@@ -746,6 +783,64 @@ Operating rules:
 - Guard the principal: never expose addresses, phone numbers, credentials or private details in anything that leaves this Mac.
 - If a task displaces a higher commercial or strategic priority, say so in one line, then still deliver.
 - Report outcomes faithfully: what was done, what was not, what needs a decision."#;
+
+// marker for tool_use names that came from the computer toolset
+const TOOLSET_PREFIX: &str = "computer::";
+
+// 5.5+ models only accept computer_toolset_20260801 (computer_2025* tools return a 400)
+fn uses_computer_toolset(model: &str) -> bool {
+    model.contains("-5-5")
+}
+
+// toolset member + params -> internal form {action: member, ...params}
+fn with_action(member: &str, input: serde_json::Value) -> serde_json::Value {
+    let mut obj = match input {
+        serde_json::Value::Object(o) => o,
+        _ => serde_json::Map::new(),
+    };
+    obj.insert("action".to_string(), serde_json::Value::String(member.to_string()));
+    serde_json::Value::Object(obj)
+}
+
+// internal computer/action history -> toolset form: name=<action>, toolset_name="computer",
+// and every matching tool_result echoes toolset_name
+fn to_toolset_messages(body: &mut serde_json::Value) {
+    let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
+        return;
+    };
+    let mut computer_ids = std::collections::HashSet::new();
+    for message in messages {
+        let Some(blocks) = message.get_mut("content").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
+        for block in blocks {
+            let Some(obj) = block.as_object_mut() else { continue };
+            match obj.get("type").and_then(|t| t.as_str()) {
+                Some("tool_use") if obj.get("name").and_then(|n| n.as_str()) == Some("computer") => {
+                    if let Some(serde_json::Value::Object(input)) = obj.get_mut("input") {
+                        if let Some(action) = input.remove("action").and_then(|a| a.as_str().map(String::from)) {
+                            if let Some(id) = obj.get("id").and_then(|i| i.as_str()) {
+                                computer_ids.insert(id.to_string());
+                            }
+                            obj.insert("name".to_string(), serde_json::Value::String(action));
+                            obj.insert("toolset_name".to_string(), serde_json::json!("computer"));
+                        }
+                    }
+                }
+                Some("tool_result") => {
+                    let is_computer = obj
+                        .get("tool_use_id")
+                        .and_then(|i| i.as_str())
+                        .is_some_and(|id| computer_ids.contains(id));
+                    if is_computer {
+                        obj.insert("toolset_name".to_string(), serde_json::json!("computer"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
 
 const SYSTEM_PROMPT: &str = r#"You are taskhomie, a macOS computer control agent. You see the screen, control mouse/keyboard, and run bash.
 
@@ -969,4 +1064,48 @@ fn build_browser_tools() -> Vec<serde_json::Value> {
             }
         }),
     ]
+}
+
+#[cfg(test)]
+mod toolset_tests {
+    use super::*;
+
+    #[test]
+    fn history_converts_to_toolset_form() {
+        let mut body = serde_json::json!({"messages": [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "computer", "input": {"action": "left_click", "coordinate": [5, 6]}},
+                {"type": "tool_use", "id": "t2", "name": "bash", "input": {"command": "ls"}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "OK"}]},
+                {"type": "tool_result", "tool_use_id": "t2", "content": [{"type": "text", "text": "x"}]}
+            ]}
+        ]});
+        to_toolset_messages(&mut body);
+        let a = &body["messages"][0]["content"];
+        assert_eq!(a[0]["name"], "left_click");
+        assert_eq!(a[0]["toolset_name"], "computer");
+        assert_eq!(a[0]["input"], serde_json::json!({"coordinate": [5, 6]}));
+        assert_eq!(a[1]["name"], "bash");
+        assert!(a[1].get("toolset_name").is_none());
+        let r = &body["messages"][1]["content"];
+        assert_eq!(r[0]["toolset_name"], "computer");
+        assert!(r[1].get("toolset_name").is_none());
+    }
+
+    #[test]
+    fn member_call_converts_back_to_action_form() {
+        let v = with_action("key", serde_json::json!({"text": "Tab", "repeat": 4}));
+        assert_eq!(v, serde_json::json!({"action": "key", "text": "Tab", "repeat": 4}));
+        assert_eq!(with_action("screenshot", serde_json::json!({})), serde_json::json!({"action": "screenshot"}));
+    }
+
+    #[test]
+    fn toolset_models() {
+        assert!(uses_computer_toolset("claude-sonnet-5-5"));
+        assert!(uses_computer_toolset("claude-opus-5-5"));
+        assert!(!uses_computer_toolset("claude-sonnet-4-5"));
+        assert!(!uses_computer_toolset("claude-haiku-4-5-20251001"));
+    }
 }
