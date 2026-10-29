@@ -3,6 +3,7 @@ pub mod api;
 pub mod bash;
 pub mod browser;
 pub mod computer;
+pub mod memory;
 pub mod openai_api;
 pub mod panels;
 pub mod storage;

@@ -10,6 +10,7 @@ mod api;
 mod bash;
 mod browser;
 mod computer;
+mod memory;
 mod openai_api;
 mod panels;
 mod permissions;

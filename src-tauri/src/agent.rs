@@ -716,6 +716,13 @@ impl Agent {
                                     content: vec![ToolResultContent::Text { text: err_msg }],
                                 });
                             }
+                        } else if name == "memory" {
+                            self.emit_tool(&app_handle, "memory", input.clone());
+                            let output = crate::memory::handle(input);
+                            tool_results.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: vec![ToolResultContent::Text { text: output }],
+                            });
                         } else if name == "speak" {
                             // handle speak tool for voice mode
                             if let Some(text) = input.get("text").and_then(|t| t.as_str()) {
@@ -760,7 +767,7 @@ impl Agent {
                             tool_results.push(ContentBlock::ToolResult {
                                 tool_use_id: id.clone(),
                                 content: vec![ToolResultContent::Text {
-                                    text: format!("Error: Unknown tool '{}'. Use the available tools: computer, bash, speak.", name),
+                                    text: format!("Error: Unknown tool '{}'. Use the available tools: computer, bash, memory, speak.", name),
                                 }],
                             });
                         }

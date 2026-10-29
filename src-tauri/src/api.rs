@@ -226,6 +226,9 @@ impl AnthropicClient {
             "max_content_tokens": 50000
         }));
 
+        // persistent notes for the chief-of-staff persona
+        tools.push(crate::memory::tool_def());
+
         // speak tool always included for stable tool caching
         // voice mode system prompt tells the model when to use it
         tools.push(serde_json::json!({
@@ -266,16 +269,17 @@ impl AnthropicClient {
     ) -> Result<ApiResult, ApiError> {
         // build system prompt as array of blocks for caching
         // base prompt is stable across all requests with same mode
-        let base_prompt = match mode {
+        let mode_prompt = match mode {
             AgentMode::Computer => SYSTEM_PROMPT,
             AgentMode::Browser => BROWSER_SYSTEM_PROMPT,
         };
+        let base_prompt = format!("{}\n\n{}", load_persona(), mode_prompt);
 
         // voice instructions vary by model, so they go in a separate block
         // this way base prompt can still be cached even if voice config differs
         let mut system_blocks = vec![SystemBlock {
             block_type: "text".to_string(),
-            text: base_prompt.to_string(),
+            text: base_prompt,
             cache_control: if voice_mode {
                 None // don't cache here, cache after voice block
             } else {
@@ -284,6 +288,14 @@ impl AnthropicClient {
                 })
             },
         }];
+
+        if let Some(memory_ctx) = crate::memory::context_block() {
+            system_blocks.push(SystemBlock {
+                block_type: "text".to_string(),
+                text: memory_ctx,
+                cache_control: None,
+            });
+        }
 
         if voice_mode {
             let voice_prompt = if self.model.contains("haiku") {
@@ -711,6 +723,29 @@ Output only the rewritten text. No explanations, no quotes, no prefixes.
     // fallback to raw text if parsing fails
     Ok(raw_text.to_string())
 }
+
+// persona: ~/.taskhomie/persona.md overrides the built-in chief-of-staff default,
+// so private standing orders stay out of the repo
+fn load_persona() -> String {
+    dirs::home_dir()
+        .map(|h| h.join(".taskhomie").join("persona.md"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_PERSONA.to_string())
+}
+
+const DEFAULT_PERSONA: &str = r#"You are the user's executive chief of staff, personal secretary and advisor. Computer control is how you get work done, not who you are.
+
+Role: run the principal's inbox, calendar, documents, research and follow-ups; brief them; protect their time; surface risks and decisions early.
+
+Voice: blunt, concise, no preamble or flattery. Lead with the answer. Give one recommendation with a position, not a menu. Mention a blocker once, factually, then move on.
+
+Operating rules:
+- Read-only and drafting work: just do it.
+- Anything outward-facing or hard to reverse (sending email or messages, accepting or declining invitations, payments, deleting, posting, signing): prepare it fully, show the exact content, and wait for an explicit yes. Never invent facts, credentials or evidence.
+- Guard the principal: never expose addresses, phone numbers, credentials or private details in anything that leaves this Mac.
+- If a task displaces a higher commercial or strategic priority, say so in one line, then still deliver.
+- Report outcomes faithfully: what was done, what was not, what needs a decision."#;
 
 const SYSTEM_PROMPT: &str = r#"You are taskhomie, a macOS computer control agent. You see the screen, control mouse/keyboard, and run bash.
 
