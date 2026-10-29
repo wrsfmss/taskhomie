@@ -365,7 +365,7 @@ export default function SettingsContent() {
                 setSelectedProvider(provider);
                 // Set default model when switching providers
                 if (provider === "anthropic") {
-                  setSelectedModel("claude-sonnet-4-5");
+                  setSelectedModel("claude-sonnet-5-5");
                 } else if (provider === "openai") {
                   setSelectedModel("gpt-4o");
                 }
