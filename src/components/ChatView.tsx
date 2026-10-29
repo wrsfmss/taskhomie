@@ -1033,6 +1033,8 @@ export default function ChatView({ variant, settingsOpen: propSettingsOpen, onSe
                       <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
                       <option value="claude-sonnet-4-5">Sonnet 4.5</option>
                       <option value="claude-opus-4-5">Opus 4.5</option>
+                      <option value="claude-sonnet-5-5">Sonnet 5.5</option>
+                      <option value="claude-opus-5-5">Opus 5.5</option>
                     </>
                   )}
                   {selectedProvider === "openai" && (
